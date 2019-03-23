@@ -64,7 +64,7 @@ func TestRandom(t *testing.T) {
 	}()
 	seed := time.Now().UnixNano()
 	t.Logf("seed: %v", seed)
-	rand.Seed(seed)
+	//rand.Seed(seed)
 	for i := 0; i < N; i++ {
 		k, v := rand.Float64(), rand.Float64()
 		m[k] = v

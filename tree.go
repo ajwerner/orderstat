@@ -1,6 +1,7 @@
 package rankorder
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 )
@@ -36,8 +37,10 @@ func NewTree(cmp Comparator) *Tree {
 }
 
 func (t *Tree) Upsert(key, value interface{}) (replaced bool) {
+	fmt.Println("Upsert", key)
 	new := t.alloc(key, value)
 	t.root, replaced = t.root.add(t, new)
+	t.root.cBST(t)
 	return replaced
 }
 
@@ -205,7 +208,7 @@ func (t *Iterator) SeekRank(it *Tree, r int) (ok bool) {
 }
 
 func (t *Tree) Delete(k interface{}) (found bool) {
-	n := node{k: k}
+	n := node{k: k, l: null, r: null, p: null}
 	it := Iterator{node: &n}
 	_, found = t.root.del(t, &it)
 	return found
@@ -227,7 +230,6 @@ func (it Iterator) del(t *Tree, toDel *Iterator) (_ Iterator, found bool) {
 		}
 		var l Iterator
 		l, found = it.l(t).del(t, toDel)
-		fmt.Println(l, found)
 		it.setLeft(l)
 	} else {
 		if it.l(t).isRed() {
@@ -268,7 +270,8 @@ func (it Iterator) max(t *Tree) Iterator {
 	return it
 }
 
-func (it Iterator) fixUp(t *Tree) Iterator {
+func (it Iterator) fixUp(t *Tree) (ret Iterator) {
+	defer it.cBST(t)(&ret)
 	if it.r(t).isRed() {
 		it = it.rotateLeft(t)
 	}
@@ -280,13 +283,23 @@ func (it Iterator) fixUp(t *Tree) Iterator {
 		colorFlip(&it, &l, &r)
 	}
 	it.setCount(l.count() + r.count())
-	if err := it.isBST(t, nil, nil); err != nil {
-		panic(err)
-	}
 	return it
 }
 
-func (it Iterator) delMin(t *Tree) Iterator {
+func (it Iterator) cBST(t *Tree) func(it *Iterator) {
+	// it.checkBST(t)
+	fmt.Println(t.String())
+	return func(it *Iterator) { it.checkBST(t) }
+}
+
+func (it Iterator) checkBST(t *Tree) {
+	if err := it.isBST(t, nil, nil); err != nil {
+		panic(err)
+	}
+}
+
+func (it Iterator) delMin(t *Tree) (ret Iterator) {
+	defer it.cBST(t)(&ret)
 	if !it.hasLeft() {
 		t.free(it)
 		return Iterator{}
@@ -329,7 +342,8 @@ func (it Iterator) colorFlip(t *Tree) {
 	colorFlip(&it, &r, &l)
 }
 
-func (it Iterator) rotateLeft(t *Tree) Iterator {
+func (it Iterator) rotateLeft(t *Tree) (ret Iterator) {
+	defer it.cBST(t)(&ret)
 	x := it.r(t)
 	it.setRight(x.l(t))
 	x.setLeft(it)
@@ -339,7 +353,8 @@ func (it Iterator) rotateLeft(t *Tree) Iterator {
 	return x
 }
 
-func (it Iterator) rotateRight(t *Tree) Iterator {
+func (it Iterator) rotateRight(t *Tree) (ret Iterator) {
+	defer it.cBST(t)(&ret)
 	x := it.l(t)
 	it.setLeft(x.r(t))
 	x.setRight(it)
@@ -350,7 +365,8 @@ func (it Iterator) rotateRight(t *Tree) Iterator {
 	return x
 }
 
-func (it Iterator) moveRedLeft(t *Tree) Iterator {
+func (it Iterator) moveRedLeft(t *Tree) (ret Iterator) {
+	defer it.cBST(t)(&ret)
 	it.colorFlip(t)
 	if r := it.r(t); r.l(t).isRed() {
 		r = r.rotateRight(t)
@@ -361,7 +377,8 @@ func (it Iterator) moveRedLeft(t *Tree) Iterator {
 	return it
 }
 
-func (it Iterator) moveRedRight(t *Tree) Iterator {
+func (it Iterator) moveRedRight(t *Tree) (ret Iterator) {
+	defer it.cBST(t)(&ret)
 	it.colorFlip(t)
 	if l := it.l(t); l.l(t).isRed() {
 		it = it.rotateRight(t)
@@ -370,17 +387,22 @@ func (it Iterator) moveRedRight(t *Tree) Iterator {
 	return it
 }
 
-func (it Iterator) add(t *Tree, toAdd Iterator) (_ Iterator, replaced bool) {
+func (it Iterator) add(t *Tree, toAdd Iterator) (ret Iterator, replaced bool) {
+	fmt.Println("asdf")
+	defer it.cBST(t)(&ret)
 	if it.node == nil {
 		toAdd.setIsRed(true)
 		return toAdd.fixUp(t), false
 	}
+
 	cmp := t.cmp(toAdd.k, it.k)
+	fmt.Println("add ", it.k, toAdd.k, it.r(t).node, cmp)
 	switch {
 	case cmp < 0:
 		var l Iterator
 		l, replaced = it.l(t).add(t, toAdd)
 		it.setLeft(l)
+		fmt.Println("left ", l.k, l.node.l, l.node.r, "it", it.k, it.node.l, it.node.r)
 	case cmp == 0:
 		it.k, it.v = toAdd.k, toAdd.v
 		t.free(toAdd)
@@ -389,6 +411,7 @@ func (it Iterator) add(t *Tree, toAdd Iterator) (_ Iterator, replaced bool) {
 		var r Iterator
 		r, replaced = it.r(t).add(t, toAdd)
 		it.setRight(r)
+		fmt.Println("right ", r.k, r.node.l, r.node.r, "it", it.k, it.node.l, it.node.r)
 	}
 	return it.fixUp(t), replaced
 }
@@ -404,20 +427,48 @@ func (it *Iterator) isBST(t *Tree, min, max interface{}) error {
 		return fmt.Errorf("key %v > max %v", it.k, max)
 	}
 	l := it.l(t)
-	fmt.Println(l.node, it.node)
-	if l.node != nil && t.cmp(it.k, l.v) < 0 {
-		return fmt.Errorf("parent key %v < left child key %v", it.k, l.v)
+	//fmt.Println(l.node, it.node)
+	if l.node != nil && t.cmp(it.k, l.k) < 0 {
+		return fmt.Errorf("parent key %v < left child key %v", it.k, l.k)
 	}
 	r := it.r(t)
-	if r.node != nil && t.cmp(it.k, r.v) > 0 {
-		return fmt.Errorf("parent key %v > right child key %v", it.k, r.v)
+	if r.node != nil && t.cmp(it.k, r.k) > 0 {
+		return fmt.Errorf("parent key (%v) %v > right child key (%v) %v", it.np, it.k, r.np, r.v)
 	}
 	// TODO: parent check
-	if err := l.isBST(t, min, it.v); err != nil {
+	if err := l.isBST(t, min, it.k); err != nil {
 		return err
 	}
-	if err := r.isBST(t, it.v, max); err != nil {
+	if err := r.isBST(t, it.k, max); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (t *Tree) String() string {
+	nodes := t.root.print(t, 0, nil)
+	buf := &bytes.Buffer{}
+	for _, nodes := range nodes {
+		for i, n := range nodes {
+			fmt.Fprintf(buf, "{%v %v %v}", n.k, n.v, n.isRed())
+			if i > 0 {
+				buf.WriteString(" ")
+			}
+		}
+		buf.WriteString("\n")
+	}
+	return buf.String()
+}
+
+func (it Iterator) print(t *Tree, depth int, nodes [][]*node) [][]*node {
+	if it.node == nil {
+		return nodes
+	}
+	if len(nodes) < depth+1 {
+		nodes = append(nodes, []*node{})
+	}
+	nodes[depth] = append(nodes[depth], it.node)
+	nodes = it.l(t).print(t, depth+1, nodes)
+	nodes = it.r(t).print(t, depth+1, nodes)
+	return nodes
 }
