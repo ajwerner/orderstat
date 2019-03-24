@@ -5,69 +5,131 @@ import (
 	"math"
 )
 
-func LessComparator(less func(a, b interface{}) (less bool)) Comparator {
-	return func(a, b interface{}) int {
-		if less(a, b) {
-			return -1
-		}
-		if less(b, a) {
-			return 1
-		}
-		return 0
-	}
+type Item interface {
+	Less(other interface{}) bool
 }
 
-// Comparator returns 0 if a == b, return a negative int if a < b and a
-// positive int if a > b.
-type Comparator func(a, b interface{}) int
-
-func CompareFloats(a, b interface{}) (cmp int) {
-	if af, bf := a.(float64), b.(float64); af < bf {
-		cmp = -1
-	} else if bf < af {
-		cmp = 1
-	}
-	return cmp
-}
+type ItemIterator func(Item) (wantMore bool)
 
 type Tree struct {
-	cmp  Comparator
 	root Iterator
 	fp   Iterator
 	list []node
 }
 
-func (t *Tree) Clone() *Tree {
-	var cp Tree
-	cp = *t
-	newList := make([]node, len(t.list))
-	copy(newList, t.list)
-	cp.list = newList
-	cp.fp.init(t, cp.fp.np)
-	cp.root.init(t, cp.root.np)
-	return &cp
-}
-
-func NewTree(cmp Comparator) *Tree {
-	t := &Tree{cmp: cmp}
+func NewTree() *Tree {
+	t := &Tree{}
 	t.root.np = null
 	t.fp.np = null
 	return t
 }
 
-func (t *Tree) Upsert(key, value interface{}) (replaced bool) {
-	// fmt.Println("Upsert", key, t.root.np, t.root.node, "\n", t.list)
-	new := t.alloc(key, value)
-	// fmt.Println("alloc'ed", new, t.list)
-	t.root, replaced = t.root.add(t, new)
+func (t *Tree) Ascend(f ItemIterator) {
+	for it, ok := t.root.min(t); ok && f(it.k); it, ok = it.next(t) {
+	}
+}
+
+func (t *Tree) AscendGreatorOrEqual(pivot Item, f ItemIterator) {
+	var it Iterator
+	ok := it.seek(t, pivot, seekGreatorOrEqual)
+	for ; ok && f(it.k); it, ok = it.next(t) {
+	}
+}
+
+func (t *Tree) AscendLessThan(pivot Item, f ItemIterator) {
+	var limit Iterator
+	if ok := limit.seek(t, pivot, seekLess); !ok {
+		return
+	}
+	it, ok := t.root.min(t)
+	for ; ok && f(it.k) && it.np != limit.np; it, ok = it.next(t) {
+	}
+}
+
+func (t *Tree) AscendRange(greatorOrEqual, lessThan Item, f ItemIterator) {
+	var limit Iterator
+	if ok := limit.seek(t, lessThan, seekLess); !ok {
+		return
+	}
+	var it Iterator
+	ok := it.seek(t, greatorOrEqual, seekGreatorOrEqual)
+	for ; ok && f(it.k) && it.np != limit.np; it, ok = it.next(t) {
+	}
+}
+
+func (t *Tree) Delete(item Item) (replaced Item) {
+	n := node{k: item, l: null, r: null, p: null}
+	it := Iterator{node: &n}
+	if !t.root.r(t).isRed() && !t.root.l(t).isRed() {
+		t.root.setIsRed(true)
+	}
+	t.root, replaced = t.root.del(t, &it)
 	t.root.setIsRed(false)
-	// t.root.cBST(t)
-	// fmt.Println("Upsert", key, "\n", t)
 	return replaced
 }
 
-func (t *Tree) Remove(key interface{}) (removed bool) {
+func (t *Tree) DeleteMin() (removed Item) {
+	t.root, removed = t.root.delMin(t)
+	return removed
+}
+
+func (t *Tree) DeleteMax() Item {
 	panic("not implemented")
+}
+
+func (t *Tree) Descend(f ItemIterator) {
+	for it, ok := t.root.max(t); ok && f(it.k); it, ok = it.prev(t) {
+	}
+}
+
+func (t *Tree) DescendGreaterThan(pivot Item, f ItemIterator) {
+	panic("not implemented")
+}
+
+func (t *Tree) DescendLessOrEqual(pivot Item, f ItemIterator) {
+	panic("not implemented")
+}
+
+func (t *Tree) DescendRange(lessOrEqual, greaterThan Item, iterator ItemIterator) {
+
+}
+
+func (t *Tree) Get(key Item) Item {
+	var it Iterator
+	if it.seek(t, key, seekEqual) {
+		return it.Item()
+	}
+	return nil
+}
+
+func (t *Tree) Has(key Item) bool {
+	var it Iterator
+	return it.seek(t, key, seekEqual)
+}
+
+func (t *Tree) Len() int {
+	return int(t.root.count())
+}
+
+func (t *Tree) Max() Item {
+	if it, ok := t.root.max(t); ok {
+		return it.k
+	}
+	return nil
+}
+
+func (t *Tree) Min() Item {
+	if it, ok := t.root.min(t); ok {
+		return it.k
+	}
+	return nil
+}
+
+func (t *Tree) ReplaceOrInsert(item Item) (replaced Item) {
+	new := t.alloc(item)
+	t.root, replaced = t.root.add(t, new)
+	t.root.setIsRed(false)
+	return replaced
 }
 
 func (t *Tree) realloc() {
@@ -93,13 +155,13 @@ func (t *Tree) realloc() {
 	t.root.init(t, t.root.np)
 }
 
-func (t *Tree) alloc(k, v interface{}) (it Iterator) {
+func (t *Tree) alloc(item Item) (it Iterator) {
 	if t.fp.node == nil {
 		t.realloc()
 	}
 	it = t.fp
 	t.fp = it.r(t)
-	*it.node = node{k: k, v: v, p: null, l: null, r: null, c: redMask}
+	*it.node = node{k: item, p: null, l: null, r: null, c: redMask}
 	return it
 }
 
@@ -124,8 +186,7 @@ const redMask uint32 = 1 << 31
 const countMask uint32 = ^redMask
 
 type node struct {
-	k interface{} // key
-	v interface{} // value
+	k Item
 	l pointer
 	r pointer
 	p pointer
@@ -147,7 +208,7 @@ func (it Iterator) String() string {
 	if it.node == nil {
 		return "{null nil}"
 	}
-	return fmt.Sprintf("{%-2d %5.5v %5.5v %.1v %-2d %-2d}", it.np, it.k, it.v, it.isRed(), it.node.l, it.node.r)
+	return fmt.Sprintf("{%-2d %5.5v %.1v %-2d %-2d}", it.np, it.k, it.isRed(), it.node.l, it.node.r)
 }
 
 func (n *node) setIsRed(to bool) {
@@ -206,20 +267,59 @@ func (it Iterator) r(t *Tree) (r Iterator) {
 	return r
 }
 
-func (it *Iterator) Seek(t *Tree, key interface{}) (ok bool) {
+type seekMode int
+
+const (
+	_ seekMode = iota
+	seekGreatorOrEqual
+	seekEqual
+	seekLess
+)
+
+func (it *Iterator) seek(t *Tree, item Item, mode seekMode) (ok bool) {
 	*it = t.root
 	for it.node != nil {
-		cmp := t.cmp(key, it.k)
 		switch {
-		case cmp < 0:
-			*it = it.l(t)
-		case cmp == 0:
-			return true
-		case cmp > 0:
+		case item.Less(it.k):
+			l := it.l(t)
+			if l.node == nil {
+				switch mode {
+				case seekGreatorOrEqual:
+					return true
+				case seekLess:
+					*it, ok = it.prev(t)
+					return
+				}
+
+			}
+			*it = l
+		case it.k.Less(item):
+			r := it.r(t)
+			if r.node == nil {
+				switch mode {
+				case seekGreatorOrEqual:
+					*it, ok = it.next(t)
+					return
+				case seekLess:
+					return true
+				}
+			}
 			*it = it.r(t)
+		default:
+			switch mode {
+			case seekGreatorOrEqual, seekEqual:
+				return true
+			case seekLess:
+				*it, ok = it.prev(t)
+				return
+			}
 		}
 	}
 	return false
+}
+
+func (it *Iterator) Seek(t *Tree, item Item) (ok bool) {
+	return it.seek(t, item, seekEqual)
 }
 
 func (it *Iterator) SeekCeil(t *Tree, key interface{}) (ok bool) {
@@ -234,73 +334,86 @@ func (t *Iterator) SeekRank(it *Tree, r int) (ok bool) {
 	panic("not implemented")
 }
 
-func (t *Tree) Delete(k interface{}) (found bool) {
-	n := node{k: k, l: null, r: null, p: null}
-	it := Iterator{node: &n}
-	if !t.root.r(t).isRed() && !t.root.l(t).isRed() {
-		t.root.setIsRed(true)
+func (it Iterator) next(t *Tree) (next Iterator, ok bool) {
+	if it.hasRight() {
+		return it.r(t).min(t)
 	}
-	t.root, found = t.root.del(t, &it)
-	t.root.setIsRed(false)
-	return found
+	p := it.p(t)
+	for ; p.node != nil && p.node.l != it.np; it, p = p, p.p(t) {
+	}
+	return p, p.node != nil
 }
 
-// // func (it *Iterator) Next() (ok bool)    { it.n = next(it.n); return it.cur != nil }
-// // func (it *Iterator) Prev() (ok bool)    { it.n = prev(it.n); return it.cur != nil }
-
-func (it *Iterator) Value() interface{} { return it.v }
-func (it *Iterator) Key() interface{}   { return it.k }
-
-func (it Iterator) del(t *Tree, toDel *Iterator) (_ Iterator, found bool) {
-	if it.node == nil {
-		return Iterator{np: null}, false
+func (it Iterator) prev(t *Tree) (next Iterator, ok bool) {
+	if it.hasLeft() {
+		return it.l(t).max(t)
 	}
-	if cmp := t.cmp(toDel.k, it.k); cmp < 0 {
+	p := it.p(t)
+	for ; p.node != nil && p.node.r != it.np; it, p = p, p.p(t) {
+	}
+	return p, p.node != nil
+}
+
+func (it *Iterator) Item() Item { return it.k }
+
+func (it Iterator) del(t *Tree, toDel *Iterator) (_ Iterator, replaced Item) {
+	if it.node == nil {
+		return Iterator{np: null}, nil
+	}
+	if less := toDel.k.Less(it.k); less {
 		if l := it.l(t); !l.isRed() && !l.l(t).isRed() {
 			it = it.moveRedLeft(t)
 		}
 		var l Iterator
-		l, found = it.l(t).del(t, toDel)
+		l, replaced = it.l(t).del(t, toDel)
 		it.setLeft(l)
 	} else {
 		if it.l(t).isRed() {
 			it = it.rotateRight(t)
 		}
-		if cmp = t.cmp(toDel.k, it.k); cmp == 0 && !it.hasRight() {
+		if less = toDel.k.Less(it.k); !less && !it.k.Less(toDel.k) && !it.hasRight() {
+			replaced = it.k
 			t.free(it)
-			return Iterator{np: null}, true
+			return Iterator{np: null}, replaced
 		}
 		if r := it.r(t); !r.isRed() && !r.l(t).isRed() {
 			it = it.moveRedRight(t)
 		}
-		if cmp = t.cmp(toDel.k, it.k); cmp == 0 {
+		if !toDel.k.Less(it.k) && !it.k.Less(toDel.k) {
 			r := it.r(t)
-			s := r.min(t)
+			s, _ := r.min(t)
+			replaced = it.k
 			it.k = s.k
-			it.v = s.v
-			it.setRight(r.delMin(t))
-			found = true
+			var rem Item
+			r, rem = r.delMin(t)
+			it.setRight(r)
 		} else {
 			var r Iterator
-			r, found = it.r(t).del(t, toDel)
+			r, replaced = it.r(t).del(t, toDel)
 			it.setRight(r)
 		}
 	}
-	return it.fixUp(t), found
+	return it.fixUp(t), replaced
 }
 
-func (it Iterator) min(t *Tree) Iterator {
+func (it Iterator) min(t *Tree) (Iterator, bool) {
+	if it.node == nil {
+		return it, false
+	}
 	for it.hasLeft() {
 		it.init(t, it.node.l)
 	}
-	return it
+	return it, true
 }
 
-func (it Iterator) max(t *Tree) Iterator {
+func (it Iterator) max(t *Tree) (Iterator, bool) {
+	if it.node == nil {
+		return it, false
+	}
 	for it.hasRight() {
 		it.init(t, it.node.r)
 	}
-	return it
+	return it, true
 }
 
 func (it Iterator) fixUp(t *Tree) (ret Iterator) {
@@ -318,16 +431,19 @@ func (it Iterator) fixUp(t *Tree) (ret Iterator) {
 	return it
 }
 
-func (it Iterator) delMin(t *Tree) (ret Iterator) {
+func (it Iterator) delMin(t *Tree) (ret Iterator, removed Item) {
 	if !it.hasLeft() {
+		removed = it.k
 		t.free(it)
-		return Iterator{np: null}
+		return Iterator{np: null}, removed
 	}
-	if l := it.l(t); !l.isRed() && !l.l(t).isRed() {
+	l := it.l(t)
+	if !l.isRed() && !l.l(t).isRed() {
 		it = it.moveRedLeft(t)
 	}
-	it.setLeft(it.l(t).delMin(t))
-	return it.fixUp(t)
+	l, removed = it.l(t).delMin(t)
+	it.setLeft(l)
+	return it.fixUp(t), removed
 }
 
 func (it Iterator) setRight(r Iterator) {
@@ -414,65 +530,28 @@ func (it Iterator) moveRedRight(t *Tree) (ret Iterator) {
 	return it
 }
 
-func (it Iterator) add(t *Tree, toAdd Iterator) (ret Iterator, replaced bool) {
+func (it Iterator) add(t *Tree, toAdd Iterator) (ret Iterator, replaced Item) {
 	if it.node == nil {
 		toAdd.setIsRed(true)
-		return toAdd.fixUp(t), false
+		return toAdd.fixUp(t), nil
 	}
-
-	cmp := t.cmp(toAdd.k, it.k)
 	switch {
-	case cmp < 0:
+	case toAdd.k.Less(it.k):
 		var l Iterator
 		l, replaced = it.l(t).add(t, toAdd)
 		it.setLeft(l)
-	case cmp == 0:
-		it.k, it.v = toAdd.k, toAdd.v
-		t.free(toAdd)
-		return it, true
-	case cmp > 0:
+	case it.k.Less(toAdd.k):
 		var r Iterator
 		r, replaced = it.r(t).add(t, toAdd)
 		it.setRight(r)
+	default:
+		replaced = it.k
+		it.k = toAdd.k
+		t.free(toAdd)
+		return it, replaced
 	}
 
 	return it.fixUp(t), replaced
-}
-
-func (it *Iterator) isBST(t *Tree, min, max interface{}) error {
-	// fmt.Println("isBST ", it.np)
-	if it.node == nil {
-		return nil
-	}
-	// fmt.Println("isBST not nil", it)
-	if min != nil && t.cmp(it.k, min) < 0 {
-		return fmt.Errorf("key %v < min %v", it.k, min)
-	}
-	if max != nil && t.cmp(it.k, max) > 0 {
-		return fmt.Errorf("key %v > max %v", it.k, max)
-	}
-	l := it.l(t)
-	//fmt.Println(l.node, it.node)
-	if l.node != nil && t.cmp(it.k, l.k) < 0 {
-		return fmt.Errorf("parent key %v < left child key %v", it.k, l.k)
-	}
-	r := it.r(t)
-	if r.node != nil {
-		// fmt.Println("aqui", r, it, t.list)
-		if t.cmp(it.k, r.k) > 0 {
-			return fmt.Errorf("parent key (%v) %v > right child key (%v) %v", it.np, it.k, r.np, r.v)
-		}
-	}
-	// TODO: parent check
-	// fmt.Println("isBST left", it.np, l.np)
-	if err := l.isBST(t, min, it.k); err != nil {
-		return err
-	}
-	// fmt.Println("isBST right", it.np, r.np)
-	if err := r.isBST(t, it.k, max); err != nil {
-		return err
-	}
-	return nil
 }
 
 // func (t *Tree) String() string {
