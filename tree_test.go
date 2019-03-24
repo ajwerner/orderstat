@@ -37,6 +37,10 @@ func TestAscendAndDescend(t *testing.T) {
 		assert.Nil(t, tr.ReplaceOrInsert(intItem(items[shuf[i]])))
 		assert.Equal(t, tr.Len(), i+1)
 	}
+	for i := 0; i < N; i++ {
+		assert.Equal(t, tr.Select(i).(intItem), intItem(i))
+		assert.Equal(t, tr.Rank(intItem(i)), i)
+	}
 	seen := 0
 	action := func() { seen++ }
 	expect := func(item Item) bool {

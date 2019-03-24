@@ -44,6 +44,44 @@ func NewTree() *Tree {
 	return t
 }
 
+func (t *Tree) Select(i int) Item {
+	if i < 0 || i >= int(t.root.count()) {
+		return nil
+	}
+	rank := uint32(i)
+	below := uint32(0)
+	it := t.root
+	for {
+		l := it.l(t)
+		lc := l.count()
+		cur := below + lc
+		if rank < cur {
+			it = l
+		} else if rank > cur {
+			below = cur + 1
+			it = it.r(t)
+		} else {
+			return it.item
+		}
+	}
+}
+
+func (t *Tree) Rank(item Item) int {
+	var it iterator
+	if ok := it.seek(t, item, seekEQ); !ok {
+		return -1
+	}
+	rank := it.l(t).count()
+	p := it.p(t)
+	for p.node != nil {
+		if p.node.r == it.np {
+			rank += p.l(t).count() + 1
+		}
+		it, p = p, p.p(t)
+	}
+	return int(rank)
+}
+
 // Ascend calls the iterator for every value in the tree within the range
 // [first, last], until iterator returns false.
 func (t *Tree) Ascend(f ItemIterator) {

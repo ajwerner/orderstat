@@ -2,11 +2,14 @@
 
 OUT=benchmark.$(date +%y%m%d.%H%M%S)
 cleanup() {
-  rm -rf ${OUT}.1
-  rm -rf ${OUT}.2
+  rm -rf ${OUT}
 }
+cd $(dirname "${BASH_SOURCE[0]}")
 trap cleanup EXIT
 export GOPATH=
-go test --bench .* ./ --benchmem --count 5 > ${OUT}.1
-go test --tags=btree --bench .* ./ --benchmem --count 5 > ${OUT}.2
-benchstat ${OUT}.1 ${OUT}.2
+COUNT=2
+go test --bench '.' ./ --benchmem --count ${COUNT} >> ${OUT}
+go test --tags=btree --bench '.' ./ --benchmem --count ${COUNT} >> ${OUT}
+go test --tags=llrb --bench '.' ./ --benchmem --count ${COUNT} >> ${OUT}
+
+benchstat ${OUT}

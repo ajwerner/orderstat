@@ -1,4 +1,4 @@
-// +build !btree
+// +build !btree,!llrb
 
 package benchmark
 

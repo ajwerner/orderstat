@@ -10,5 +10,5 @@ type ItemIterator = btree.ItemIterator
 const Name = "btree"
 
 func NewTree() Tree {
-	return btree.New(2)
+	return btree.New(64)
 }
