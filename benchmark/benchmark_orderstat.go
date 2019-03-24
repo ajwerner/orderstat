@@ -2,13 +2,13 @@
 
 package benchmark
 
-import "github.com/ajwerner/rankorder"
+import "github.com/ajwerner/orderstat"
 
-type Item = rankorder.Item
-type ItemIterator = rankorder.ItemIterator
+type Item = orderstat.Item
+type ItemIterator = orderstat.ItemIterator
 
 const Name = "orderstat"
 
 func NewTree() Tree {
-	return rankorder.NewTree()
+	return orderstat.NewTree()
 }

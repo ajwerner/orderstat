@@ -1,4 +1,4 @@
-package rankorder
+package orderstat
 
 import "fmt"
 
