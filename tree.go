@@ -1,7 +1,6 @@
 package rankorder
 
 import (
-	"bytes"
 	"fmt"
 	"math"
 )
@@ -22,11 +21,31 @@ func LessComparator(less func(a, b interface{}) (less bool)) Comparator {
 // positive int if a > b.
 type Comparator func(a, b interface{}) int
 
+func CompareFloats(a, b interface{}) (cmp int) {
+	if af, bf := a.(float64), b.(float64); af < bf {
+		cmp = -1
+	} else if bf < af {
+		cmp = 1
+	}
+	return cmp
+}
+
 type Tree struct {
 	cmp  Comparator
 	root Iterator
 	fp   Iterator
 	list []node
+}
+
+func (t *Tree) Clone() *Tree {
+	var cp Tree
+	cp = *t
+	newList := make([]node, len(t.list))
+	copy(newList, t.list)
+	cp.list = newList
+	cp.fp.init(t, cp.fp.np)
+	cp.root.init(t, cp.root.np)
+	return &cp
 }
 
 func NewTree(cmp Comparator) *Tree {
@@ -37,10 +56,13 @@ func NewTree(cmp Comparator) *Tree {
 }
 
 func (t *Tree) Upsert(key, value interface{}) (replaced bool) {
-	fmt.Println("Upsert", key)
+	// fmt.Println("Upsert", key, t.root.np, t.root.node, "\n", t.list)
 	new := t.alloc(key, value)
+	// fmt.Println("alloc'ed", new, t.list)
 	t.root, replaced = t.root.add(t, new)
-	t.root.cBST(t)
+	t.root.setIsRed(false)
+	// t.root.cBST(t)
+	// fmt.Println("Upsert", key, "\n", t)
 	return replaced
 }
 
@@ -52,7 +74,7 @@ func (t *Tree) realloc() {
 	prevLen := len(t.list)
 	var newList []node
 	if prevLen > 0 {
-		newList := make([]node, 2*prevLen)
+		newList = make([]node, 2*prevLen)
 		copy(newList, t.list)
 	} else {
 		const defaultSize = 16
@@ -65,11 +87,10 @@ func (t *Tree) realloc() {
 			r: pointer(i),
 		}
 	}
-	t.fp = Iterator{
-		node: &newList[prevLen],
-		np:   pointer(prevLen),
-	}
+	newList[len(newList)-1] = node{p: null, l: null, r: null}
 	t.list = newList
+	t.fp.init(t, pointer(prevLen))
+	t.root.init(t, t.root.np)
 }
 
 func (t *Tree) alloc(k, v interface{}) (it Iterator) {
@@ -78,7 +99,7 @@ func (t *Tree) alloc(k, v interface{}) (it Iterator) {
 	}
 	it = t.fp
 	t.fp = it.r(t)
-	*it.node = node{k: k, v: v, p: null, l: null, r: null}
+	*it.node = node{k: k, v: v, p: null, l: null, r: null, c: redMask}
 	return it
 }
 
@@ -95,7 +116,6 @@ const null pointer = math.MaxUint32
 func (p pointer) n(t *Tree) *node {
 	if p == null { // maybe hubris
 		return nil
-
 	}
 	return &t.list[int(p)]
 }
@@ -120,7 +140,14 @@ func (n *node) flipRed() {
 	if n == nil {
 		return
 	}
-	n.c = n.c | ((n.c ^ redMask) | countMask)
+	n.c = ((n.c^redMask)&redMask | (n.c & countMask))
+}
+
+func (it Iterator) String() string {
+	if it.node == nil {
+		return "{null nil}"
+	}
+	return fmt.Sprintf("{%-2d %5.5v %5.5v %.1v %-2d %-2d}", it.np, it.k, it.v, it.isRed(), it.node.l, it.node.r)
 }
 
 func (n *node) setIsRed(to bool) {
@@ -210,7 +237,11 @@ func (t *Iterator) SeekRank(it *Tree, r int) (ok bool) {
 func (t *Tree) Delete(k interface{}) (found bool) {
 	n := node{k: k, l: null, r: null, p: null}
 	it := Iterator{node: &n}
-	_, found = t.root.del(t, &it)
+	if !t.root.r(t).isRed() && !t.root.l(t).isRed() {
+		t.root.setIsRed(true)
+	}
+	t.root, found = t.root.del(t, &it)
+	t.root.setIsRed(false)
 	return found
 }
 
@@ -222,7 +253,7 @@ func (it *Iterator) Key() interface{}   { return it.k }
 
 func (it Iterator) del(t *Tree, toDel *Iterator) (_ Iterator, found bool) {
 	if it.node == nil {
-		return it, false
+		return Iterator{np: null}, false
 	}
 	if cmp := t.cmp(toDel.k, it.k); cmp < 0 {
 		if l := it.l(t); !l.isRed() && !l.l(t).isRed() {
@@ -235,18 +266,20 @@ func (it Iterator) del(t *Tree, toDel *Iterator) (_ Iterator, found bool) {
 		if it.l(t).isRed() {
 			it = it.rotateRight(t)
 		}
-		if cmp == 0 && !it.hasRight() {
+		if cmp = t.cmp(toDel.k, it.k); cmp == 0 && !it.hasRight() {
 			t.free(it)
 			return Iterator{np: null}, true
 		}
 		if r := it.r(t); !r.isRed() && !r.l(t).isRed() {
 			it = it.moveRedRight(t)
 		}
-		if it.np == toDel.np {
+		if cmp = t.cmp(toDel.k, it.k); cmp == 0 {
 			r := it.r(t)
 			s := r.min(t)
+			it.k = s.k
 			it.v = s.v
 			it.setRight(r.delMin(t))
+			found = true
 		} else {
 			var r Iterator
 			r, found = it.r(t).del(t, toDel)
@@ -271,7 +304,6 @@ func (it Iterator) max(t *Tree) Iterator {
 }
 
 func (it Iterator) fixUp(t *Tree) (ret Iterator) {
-	defer it.cBST(t)(&ret)
 	if it.r(t).isRed() {
 		it = it.rotateLeft(t)
 	}
@@ -282,27 +314,14 @@ func (it Iterator) fixUp(t *Tree) (ret Iterator) {
 	if l.isRed() && r.isRed() {
 		colorFlip(&it, &l, &r)
 	}
-	it.setCount(l.count() + r.count())
+	it.setCount(l.count() + r.count() + 1)
 	return it
 }
 
-func (it Iterator) cBST(t *Tree) func(it *Iterator) {
-	// it.checkBST(t)
-	fmt.Println(t.String())
-	return func(it *Iterator) { it.checkBST(t) }
-}
-
-func (it Iterator) checkBST(t *Tree) {
-	if err := it.isBST(t, nil, nil); err != nil {
-		panic(err)
-	}
-}
-
 func (it Iterator) delMin(t *Tree) (ret Iterator) {
-	defer it.cBST(t)(&ret)
 	if !it.hasLeft() {
 		t.free(it)
-		return Iterator{}
+		return Iterator{np: null}
 	}
 	if l := it.l(t); !l.isRed() && !l.l(t).isRed() {
 		it = it.moveRedLeft(t)
@@ -342,35 +361,41 @@ func (it Iterator) colorFlip(t *Tree) {
 	colorFlip(&it, &r, &l)
 }
 
-func (it Iterator) rotateLeft(t *Tree) (ret Iterator) {
-	defer it.cBST(t)(&ret)
-	x := it.r(t)
-	it.setRight(x.l(t))
-	x.setLeft(it)
-	x.setIsRed(it.l(t).isRed())
-	it.l(t).setIsRed(true)
-	x.node.p = null
-	return x
-}
-
 func (it Iterator) rotateRight(t *Tree) (ret Iterator) {
-	defer it.cBST(t)(&ret)
+	if it.node == nil || !it.l(t).isRed() {
+		panic("invalid rotate right")
+	}
 	x := it.l(t)
 	it.setLeft(x.r(t))
 	x.setRight(it)
-	r := it.r(t)
-	x.setIsRed(r.isRed())
-	r.setIsRed(true)
+	x.setIsRed(it.isRed())
+	it.setIsRed(true)
 	x.node.p = null
+	x.setCount(x.l(t).count() + x.r(t).count() + 1)
+	return x
+}
+
+func (it Iterator) rotateLeft(t *Tree) (ret Iterator) {
+	// if it.node == nil || !it.r(t).isRed() {
+	// 	panic(fmt.Sprintf("invalid rotate left %v %v", it, it.r(t)))
+	// }
+	x := it.r(t)
+	it.setRight(x.l(t))
+	x.setLeft(it)
+	x.setIsRed(it.isRed())
+	it.setIsRed(true)
+	x.node.p = null
+	x.setCount(x.l(t).count() + x.r(t).count() + 1)
 	return x
 }
 
 func (it Iterator) moveRedLeft(t *Tree) (ret Iterator) {
-	defer it.cBST(t)(&ret)
+	// if it.node == nil || !(it.isRed() && !it.l(t).isRed() && !it.l(t).l(t).isRed()) {
+	// 	panic(fmt.Sprintf("invalid moveRedLeft %v %v %v", it, it.l(t), it.l(t).l(t)))
+	// }
 	it.colorFlip(t)
 	if r := it.r(t); r.l(t).isRed() {
-		r = r.rotateRight(t)
-		it.setRight(r)
+		it.setRight(r.rotateRight(t))
 		it = it.rotateLeft(t)
 		it.colorFlip(t)
 	}
@@ -378,7 +403,9 @@ func (it Iterator) moveRedLeft(t *Tree) (ret Iterator) {
 }
 
 func (it Iterator) moveRedRight(t *Tree) (ret Iterator) {
-	defer it.cBST(t)(&ret)
+	// if it.node == nil || !(it.isRed() && !it.r(t).isRed() && !it.r(t).l(t).isRed()) {
+	// 	panic("invalid moveRedLeft")
+	// }
 	it.colorFlip(t)
 	if l := it.l(t); l.l(t).isRed() {
 		it = it.rotateRight(t)
@@ -388,21 +415,17 @@ func (it Iterator) moveRedRight(t *Tree) (ret Iterator) {
 }
 
 func (it Iterator) add(t *Tree, toAdd Iterator) (ret Iterator, replaced bool) {
-	fmt.Println("asdf")
-	defer it.cBST(t)(&ret)
 	if it.node == nil {
 		toAdd.setIsRed(true)
 		return toAdd.fixUp(t), false
 	}
 
 	cmp := t.cmp(toAdd.k, it.k)
-	fmt.Println("add ", it.k, toAdd.k, it.r(t).node, cmp)
 	switch {
 	case cmp < 0:
 		var l Iterator
 		l, replaced = it.l(t).add(t, toAdd)
 		it.setLeft(l)
-		fmt.Println("left ", l.k, l.node.l, l.node.r, "it", it.k, it.node.l, it.node.r)
 	case cmp == 0:
 		it.k, it.v = toAdd.k, toAdd.v
 		t.free(toAdd)
@@ -411,15 +434,17 @@ func (it Iterator) add(t *Tree, toAdd Iterator) (ret Iterator, replaced bool) {
 		var r Iterator
 		r, replaced = it.r(t).add(t, toAdd)
 		it.setRight(r)
-		fmt.Println("right ", r.k, r.node.l, r.node.r, "it", it.k, it.node.l, it.node.r)
 	}
+
 	return it.fixUp(t), replaced
 }
 
 func (it *Iterator) isBST(t *Tree, min, max interface{}) error {
+	// fmt.Println("isBST ", it.np)
 	if it.node == nil {
 		return nil
 	}
+	// fmt.Println("isBST not nil", it)
 	if min != nil && t.cmp(it.k, min) < 0 {
 		return fmt.Errorf("key %v < min %v", it.k, min)
 	}
@@ -432,43 +457,48 @@ func (it *Iterator) isBST(t *Tree, min, max interface{}) error {
 		return fmt.Errorf("parent key %v < left child key %v", it.k, l.k)
 	}
 	r := it.r(t)
-	if r.node != nil && t.cmp(it.k, r.k) > 0 {
-		return fmt.Errorf("parent key (%v) %v > right child key (%v) %v", it.np, it.k, r.np, r.v)
+	if r.node != nil {
+		// fmt.Println("aqui", r, it, t.list)
+		if t.cmp(it.k, r.k) > 0 {
+			return fmt.Errorf("parent key (%v) %v > right child key (%v) %v", it.np, it.k, r.np, r.v)
+		}
 	}
 	// TODO: parent check
+	// fmt.Println("isBST left", it.np, l.np)
 	if err := l.isBST(t, min, it.k); err != nil {
 		return err
 	}
+	// fmt.Println("isBST right", it.np, r.np)
 	if err := r.isBST(t, it.k, max); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (t *Tree) String() string {
-	nodes := t.root.print(t, 0, nil)
-	buf := &bytes.Buffer{}
-	for _, nodes := range nodes {
-		for i, n := range nodes {
-			fmt.Fprintf(buf, "{%v %v %v}", n.k, n.v, n.isRed())
-			if i > 0 {
-				buf.WriteString(" ")
-			}
-		}
-		buf.WriteString("\n")
-	}
-	return buf.String()
-}
+// func (t *Tree) String() string {
+// 	_, bufs := t.root.print(t, 0, 0, nil)
+// 	if len(bufs) == 0 {
+// 		return ""
+// 	}
+// 	buf := bufs[0]
+// 	for _, b := range bufs[1:] {
+// 		buf.WriteString("\n")
+// 		buf.ReadFrom(b)
+// 	}
+// 	buf.WriteString("\n")
+// 	return buf.String()
+// }
 
-func (it Iterator) print(t *Tree, depth int, nodes [][]*node) [][]*node {
-	if it.node == nil {
-		return nodes
-	}
-	if len(nodes) < depth+1 {
-		nodes = append(nodes, []*node{})
-	}
-	nodes[depth] = append(nodes[depth], it.node)
-	nodes = it.l(t).print(t, depth+1, nodes)
-	nodes = it.r(t).print(t, depth+1, nodes)
-	return nodes
-}
+// func (it Iterator) print(t *Tree, col, depth int, bufs []*bytes.Buffer) (int, []*bytes.Buffer) {
+// 	if it.node == nil {
+// 		return col, bufs
+// 	}
+// 	if len(bufs) < depth+1 {
+// 		bufs = append(bufs, &bytes.Buffer{})
+// 	}
+// 	col, bufs = it.l(t).print(t, col, depth+1, bufs)
+// 	buf := bufs[depth]
+// 	fmt.Fprintf(buf, "%s%v", strings.Repeat(" ", col), it.String())
+// 	_, bufs = it.r(t).print(t, col-8, depth+1, bufs)
+// 	return col + 16, bufs
+// }
