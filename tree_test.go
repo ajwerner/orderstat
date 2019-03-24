@@ -1,7 +1,6 @@
 package rankorder
 
 import (
-	"fmt"
 	"math/rand"
 	"strconv"
 	"testing"
@@ -9,16 +8,12 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func (t *Tree) isBST() error {
-	return t.root.isBST(t, nil, nil)
-}
-
 type keyValue struct {
 	k string
 	v string
 }
 
-func (kv keyValue) Less(other interface{}) bool {
+func (kv keyValue) Less(other Item) bool {
 	return kv.k < other.(keyValue).k
 }
 
@@ -26,7 +21,7 @@ func kv(k, v string) keyValue { return keyValue{k: k, v: v} }
 
 type intItem int
 
-func (ii intItem) Less(other interface{}) bool {
+func (ii intItem) Less(other Item) bool {
 	return ii < other.(intItem)
 }
 
@@ -40,7 +35,7 @@ func TestAscendAndDescend(t *testing.T) {
 	shuf := rand.Perm(N)
 	for i := 0; i < N; i++ {
 		assert.Nil(t, tr.ReplaceOrInsert(intItem(items[shuf[i]])))
-		// assert.Equal(t, tr.Len(), i+1)
+		assert.Equal(t, tr.Len(), i+1)
 	}
 	seen := 0
 	action := func() { seen++ }
@@ -51,7 +46,7 @@ func TestAscendAndDescend(t *testing.T) {
 	}
 	tr.Ascend(expect)
 	seen = rand.Intn(N)
-	tr.AscendGreatorOrEqual(intItem(items[seen]), expect)
+	tr.AscendGreaterOrEqual(intItem(items[seen]), expect)
 	max := rand.Intn(N)
 	seen = 0
 	tr.AscendLessThan(intItem(items[max]), expect)
@@ -67,33 +62,10 @@ func TestAscendAndDescend(t *testing.T) {
 	seen = len(items) - 1
 	action = func() { seen-- }
 	tr.Descend(expect)
-}
-
-func (it *Iterator) isBST(t *Tree, min, max Item) error {
-	if it.node == nil {
-		return nil
-	}
-	if min != nil && it.k.Less(min) {
-		return fmt.Errorf("key %v < min %v", it.k, min)
-	}
-	if max != nil && max.Less(it.k) {
-		return fmt.Errorf("key %v > max %v", it.k, max)
-	}
-	l := it.l(t)
-	if l.node != nil && it.k.Less(l.k) {
-		return fmt.Errorf("parent key %v < left child key %v", it.k, l.k)
-	}
-	r := it.r(t)
-	if r.node != nil && r.k.Less(it.k) {
-		return fmt.Errorf("parent key (%v) %v > right child key (%v)", it.np, it.k, r.np)
-	}
-	if err := l.isBST(t, min, it.k); err != nil {
-		return err
-	}
-	if err := r.isBST(t, it.k, max); err != nil {
-		return err
-	}
-	return nil
+	min := rand.Intn(N)
+	seen = len(items) - 1
+	tr.DescendGreaterThan(intItem(min), expect)
+	assert.Equal(t, seen, min)
 }
 
 func TestTree(t *testing.T) {
@@ -104,11 +76,8 @@ func TestTree(t *testing.T) {
 	assert.Nil(t, tr.isBST())
 	assert.Nil(t, tr.ReplaceOrInsert(kv("e", "f")))
 	assert.Nil(t, tr.isBST())
-	var it Iterator
-	assert.True(t, it.Seek(tr, kv("c", "")))
-	assert.Equal(t, it.Item().(keyValue), kv("c", "d"))
-	assert.True(t, it.Seek(tr, kv("a", "")))
-	assert.Equal(t, it.Item().(keyValue), kv("a", "b"))
+	assert.Equal(t, tr.Get(kv("c", "")).(keyValue), kv("c", "d"))
+	assert.Equal(t, tr.Get(kv("a", "")).(keyValue), kv("a", "b"))
 	assert.NotNil(t, tr.Delete(kv("a", "")))
 	assert.Nil(t, tr.Delete(kv("a", "")))
 	assert.NotNil(t, tr.Delete(kv("c", "")))
